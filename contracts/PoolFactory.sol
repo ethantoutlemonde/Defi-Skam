@@ -10,10 +10,14 @@ contract LiquidityPool {
     uint256 public reserveA;
     uint256 public reserveB;
     address public creator;
+    uint256 public totalLiquidityShares;
+    mapping(address => uint256) public liquidityShares;
 
-    event LiquidityAdded(address indexed user, uint256 amountA, uint256 amountB);
-    event LiquidityRemoved(address indexed user, uint256 amountA, uint256 amountB);
-    event SwapExecuted(address indexed user, uint256 amountIn, uint256 amountOut, address tokenIn, address tokenOut);
+    uint256 public constant SWAP_FEE = 200; // 2% en basis points (10000 = 100%)
+
+    event LiquidityAdded(address indexed user, uint256 amountA, uint256 amountB, uint256 shares);
+    event LiquidityRemoved(address indexed user, uint256 amountA, uint256 amountB, uint256 shares);
+    event SwapExecuted(address indexed user, uint256 amountIn, uint256 amountOut, address tokenIn, address tokenOut, uint256 fee);
 
     constructor(address _tokenA, address _tokenB, uint256 _amountA, uint256 _amountB, address _creator) {
         require(_tokenA != _tokenB, "Tokens must be different");
@@ -28,6 +32,10 @@ contract LiquidityPool {
         // Transférer les tokens du créateur au pool
         require(IERC20(tokenA).transferFrom(_creator, address(this), _amountA), "Transfer failed for Token A");
         require(IERC20(tokenB).transferFrom(_creator, address(this), _amountB), "Transfer failed for Token B");
+
+        // Initialisation des parts de liquidité
+        totalLiquidityShares = _amountA + _amountB;
+        liquidityShares[_creator] = totalLiquidityShares;
     }
 
     function addLiquidity(uint256 amountA, uint256 amountB) external {
@@ -36,15 +44,25 @@ contract LiquidityPool {
         require(IERC20(tokenA).transferFrom(msg.sender, address(this), amountA), "Transfer failed for Token A");
         require(IERC20(tokenB).transferFrom(msg.sender, address(this), amountB), "Transfer failed for Token B");
 
+        uint256 newShares = amountA + amountB;
+        liquidityShares[msg.sender] += newShares;
+        totalLiquidityShares += newShares;
+
         reserveA += amountA;
         reserveB += amountB;
 
-        emit LiquidityAdded(msg.sender, amountA, amountB);
+        emit LiquidityAdded(msg.sender, amountA, amountB, newShares);
     }
 
-    function removeLiquidity(uint256 amountA, uint256 amountB) external {
-        require(amountA > 0 && amountB > 0, "Amounts must be > 0");
-        require(reserveA >= amountA && reserveB >= amountB, "Insufficient liquidity");
+    function removeLiquidity(uint256 shares) external {
+        require(shares > 0, "Shares must be > 0");
+        require(liquidityShares[msg.sender] >= shares, "Insufficient shares");
+
+        uint256 amountA = (shares * reserveA) / totalLiquidityShares;
+        uint256 amountB = (shares * reserveB) / totalLiquidityShares;
+
+        liquidityShares[msg.sender] -= shares;
+        totalLiquidityShares -= shares;
 
         reserveA -= amountA;
         reserveB -= amountB;
@@ -52,7 +70,7 @@ contract LiquidityPool {
         require(IERC20(tokenA).transfer(msg.sender, amountA), "Transfer failed for Token A");
         require(IERC20(tokenB).transfer(msg.sender, amountB), "Transfer failed for Token B");
 
-        emit LiquidityRemoved(msg.sender, amountA, amountB);
+        emit LiquidityRemoved(msg.sender, amountA, amountB, shares);
     }
 
     function swap(address tokenIn, uint256 amountIn) external {
@@ -65,13 +83,15 @@ contract LiquidityPool {
         require(amountIn > 0, "Amount must be > 0");
         require(reserveIn + amountIn > 0, "Invalid reserves");
 
-        // Calcul du montant de sortie (simplifié, sans frais)
-        uint256 amountOut = (amountIn * reserveOut) / (reserveIn + amountIn);
+        // Calcul du frais de swap (2%)
+        uint256 fee = (amountIn * SWAP_FEE) / 10000;
+        uint256 amountInAfterFee = amountIn - fee;
 
-        require(IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn), "Transfer failed");
-        require(IERC20(tokenOut).transfer(msg.sender, amountOut), "Transfer failed");
+        // Calcul du montant de sortie
+        uint256 amountOut = (amountInAfterFee * reserveOut) / (reserveIn + amountInAfterFee);
+        require(amountOut > 0, "Swap amount too low");
 
-        // Mettre à jour les réserves
+        // Mise à jour des réserves
         if (tokenIn == tokenA) {
             reserveA += amountIn;
             reserveB -= amountOut;
@@ -80,7 +100,25 @@ contract LiquidityPool {
             reserveA -= amountOut;
         }
 
-        emit SwapExecuted(msg.sender, amountIn, amountOut, tokenIn, tokenOut);
+        // Distribuer les frais aux LPs
+        distributeFees(fee, tokenIn);
+
+        // Effectuer le transfert des tokens
+        require(IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn), "Transfer failed");
+        require(IERC20(tokenOut).transfer(msg.sender, amountOut), "Transfer failed");
+
+        emit SwapExecuted(msg.sender, amountIn, amountOut, tokenIn, tokenOut, fee);
+    }
+
+    function distributeFees(uint256 fee, address tokenIn) internal {
+        if (totalLiquidityShares == 0) return;
+
+        // Ajoute le montant des frais aux réserves
+        if (tokenIn == tokenA) {
+            reserveA += fee;
+        } else {
+            reserveB += fee;
+        }
     }
 
     function getReserves() external view returns (uint256, uint256) {
@@ -89,6 +127,6 @@ contract LiquidityPool {
 
     function getLiquidityRatio() external view returns (uint256) {
         require(reserveB > 0, "Division by zero");
-        return (reserveA * 1e18) / reserveB; // Ratio en base 1e18 pour éviter les décimales flottantes
+        return (reserveA * 1e18) / reserveB;
     }
 }
