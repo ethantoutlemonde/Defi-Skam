@@ -2,75 +2,63 @@
 pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
+import "./PoolToken.sol";
 
 contract LiquidityPool {
     address public tokenA;
     address public tokenB;
     uint256 public reserveA;
     uint256 public reserveB;
-    address public creator;
-    uint256 public totalLiquidityShares;
-    mapping(address => uint256) public liquidityShares;
+    PoolToken public lpToken;
 
-    uint256 public constant SWAP_FEE = 200; // 2% en basis points (10000 = 100%)
+    uint256 public constant SWAP_FEE = 200; // 2% de frais en basis points (10000 = 100%)
 
-    event LiquidityAdded(address indexed user, uint256 amountA, uint256 amountB, uint256 shares);
-    event LiquidityRemoved(address indexed user, uint256 amountA, uint256 amountB, uint256 shares);
+    event LiquidityAdded(address indexed user, uint256 amountA, uint256 amountB, uint256 lpMinted);
+    event LiquidityRemoved(address indexed user, uint256 lpBurned, uint256 amountA, uint256 amountB);
     event SwapExecuted(address indexed user, uint256 amountIn, uint256 amountOut, address tokenIn, address tokenOut, uint256 fee);
 
-    constructor(address _tokenA, address _tokenB, uint256 _amountA, uint256 _amountB, address _creator) {
+    constructor(address _tokenA, address _tokenB) {
         require(_tokenA != _tokenB, "Tokens must be different");
-        require(_amountA > 0 && _amountB > 0, "Initial liquidity must be > 0");
-
         tokenA = _tokenA;
         tokenB = _tokenB;
-        reserveA = _amountA;
-        reserveB = _amountB;
-        creator = _creator;
-
-        // Transférer les tokens du créateur au pool
-        require(IERC20(tokenA).transferFrom(_creator, address(this), _amountA), "Transfer failed for Token A");
-        require(IERC20(tokenB).transferFrom(_creator, address(this), _amountB), "Transfer failed for Token B");
-
-        // Initialisation des parts de liquidité
-        totalLiquidityShares = _amountA + _amountB;
-        liquidityShares[_creator] = totalLiquidityShares;
+        lpToken = new PoolToken("Pool LP Token", "PLP");
     }
 
     function addLiquidity(uint256 amountA, uint256 amountB) external {
         require(amountA > 0 && amountB > 0, "Amounts must be > 0");
 
-        require(IERC20(tokenA).transferFrom(msg.sender, address(this), amountA), "Transfer failed for Token A");
-        require(IERC20(tokenB).transferFrom(msg.sender, address(this), amountB), "Transfer failed for Token B");
+        IERC20(tokenA).transferFrom(msg.sender, address(this), amountA);
+        IERC20(tokenB).transferFrom(msg.sender, address(this), amountB);
 
-        uint256 newShares = amountA + amountB;
-        liquidityShares[msg.sender] += newShares;
-        totalLiquidityShares += newShares;
+        uint256 lpMinted;
+        if (reserveA == 0 && reserveB == 0) {
+            lpMinted = amountA + amountB; // Première liquidité, pas de ratio
+        } else {
+            lpMinted = (amountA + amountB) * lpToken.totalSupply() / (reserveA + reserveB);
+        }
 
         reserveA += amountA;
         reserveB += amountB;
+        lpToken.mint(msg.sender, lpMinted);
 
-        emit LiquidityAdded(msg.sender, amountA, amountB, newShares);
+        emit LiquidityAdded(msg.sender, amountA, amountB, lpMinted);
     }
 
-    function removeLiquidity(uint256 shares) external {
-        require(shares > 0, "Shares must be > 0");
-        require(liquidityShares[msg.sender] >= shares, "Insufficient shares");
+    function removeLiquidity(uint256 lpAmount) external {
+        require(lpAmount > 0, "LP amount must be > 0");
+        require(lpToken.balanceOf(msg.sender) >= lpAmount, "Insufficient LP balance");
 
-        uint256 amountA = (shares * reserveA) / totalLiquidityShares;
-        uint256 amountB = (shares * reserveB) / totalLiquidityShares;
-
-        liquidityShares[msg.sender] -= shares;
-        totalLiquidityShares -= shares;
+        uint256 amountA = (lpAmount * reserveA) / lpToken.totalSupply();
+        uint256 amountB = (lpAmount * reserveB) / lpToken.totalSupply();
 
         reserveA -= amountA;
         reserveB -= amountB;
+        lpToken.burn(msg.sender, lpAmount);
 
-        require(IERC20(tokenA).transfer(msg.sender, amountA), "Transfer failed for Token A");
-        require(IERC20(tokenB).transfer(msg.sender, amountB), "Transfer failed for Token B");
+        IERC20(tokenA).transfer(msg.sender, amountA);
+        IERC20(tokenB).transfer(msg.sender, amountB);
 
-        emit LiquidityRemoved(msg.sender, amountA, amountB, shares);
+        emit LiquidityRemoved(msg.sender, lpAmount, amountA, amountB);
     }
 
     function swap(address tokenIn, uint256 amountIn) external {
@@ -83,7 +71,7 @@ contract LiquidityPool {
         require(amountIn > 0, "Amount must be > 0");
         require(reserveIn + amountIn > 0, "Invalid reserves");
 
-        // Calcul du frais de swap (2%)
+        // Calcul des frais de swap (2%)
         uint256 fee = (amountIn * SWAP_FEE) / 10000;
         uint256 amountInAfterFee = amountIn - fee;
 
@@ -100,25 +88,28 @@ contract LiquidityPool {
             reserveA -= amountOut;
         }
 
-        // Distribuer les frais aux LPs
+        // Ajoute les frais aux réserves
         distributeFees(fee, tokenIn);
 
-        // Effectuer le transfert des tokens
-        require(IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn), "Transfer failed");
-        require(IERC20(tokenOut).transfer(msg.sender, amountOut), "Transfer failed");
+        // Transferts des tokens
+        IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn);
+        IERC20(tokenOut).transfer(msg.sender, amountOut);
 
         emit SwapExecuted(msg.sender, amountIn, amountOut, tokenIn, tokenOut, fee);
     }
 
     function distributeFees(uint256 fee, address tokenIn) internal {
-        if (totalLiquidityShares == 0) return;
+        if (totalLiquidityShares() == 0) return;
 
-        // Ajoute le montant des frais aux réserves
         if (tokenIn == tokenA) {
             reserveA += fee;
         } else {
             reserveB += fee;
         }
+    }
+
+    function totalLiquidityShares() public view returns (uint256) {
+        return lpToken.totalSupply();
     }
 
     function getReserves() external view returns (uint256, uint256) {
