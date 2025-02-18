@@ -2,12 +2,13 @@
 pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "./ErrorLibrary.sol";
 
 contract PoolToken is ERC20 {
     address public poolContract;
 
     modifier onlyPool() {
-        require(msg.sender == poolContract, "Only pool contract can mint/burn");
+        require(msg.sender == poolContract, ErrorLibrary.ONLY_POOL_CAN_BURN_OR_MINT());
         _;
     }
 

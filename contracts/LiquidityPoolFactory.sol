@@ -2,25 +2,26 @@
 pragma solidity ^0.8.20;
 
 import "./LiquidityPool.sol";
+import "./ErrorLibrary.sol";
 
 contract LiquidityPoolFactory {
-    event PoolCreated(address indexed poolAddress, address tokenA, address tokenB);
+    event PoolCreated(address indexed poolAddress, address tokenA, address tokenB, address treasury);
 
     mapping(address => mapping(address => address)) public getPool;
     address[] public allPools;
 
-    function createPool(address tokenA, address tokenB) external returns (address) {
-        require(tokenA != tokenB, "Tokens must be different");
-        require(getPool[tokenA][tokenB] == address(0), "Pool already exists");
+    function createPool(address tokenA, address tokenB, address treasury) external returns (address) {
+        require(tokenA != tokenB, ErrorLibrary.TOKENS_MUST_BE_DIFFERENT());
+        require(getPool[tokenA][tokenB] == address(0), ErrorLibrary.POOL_ALREADY_EXISTS(address(getPool[tokenA][tokenB])));
 
-        LiquidityPool pool = new LiquidityPool(tokenA, tokenB);
+        LiquidityPool pool = new LiquidityPool(tokenA, tokenB, treasury);
         address poolAddress = address(pool);
 
         getPool[tokenA][tokenB] = poolAddress;
-        getPool[tokenB][tokenA] = poolAddress; // Support bidirectional lookup
+        getPool[tokenB][tokenA] = poolAddress;
         allPools.push(poolAddress);
 
-        emit PoolCreated(poolAddress, tokenA, tokenB);
+        emit PoolCreated(poolAddress, tokenA, tokenB, treasury);
         return poolAddress;
     }
 
