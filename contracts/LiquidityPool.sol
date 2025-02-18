@@ -125,4 +125,8 @@ contract LiquidityPool {
         require(reserveB > 0, ErrorLibrary.DIVISION_BY_ZERO());
         return (reserveA * 1e18) / reserveB;
     }
+
+    function getLiquidityInPool() external view returns (uint256, uint256){
+        return (reserveA, reserveB);
+    }
 }
