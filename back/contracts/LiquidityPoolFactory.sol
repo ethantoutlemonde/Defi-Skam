@@ -10,11 +10,17 @@ contract LiquidityPoolFactory {
     mapping(address => mapping(address => address)) public getPool;
     address[] public allPools;
 
-    function createPool(address tokenA, address tokenB, address treasury) external returns (address) {
+    function createPool(
+        address tokenA, 
+        address tokenB, 
+        address treasury, 
+        address priceFeedA, 
+        address priceFeedB
+    ) external returns (address) {
         require(tokenA != tokenB, ErrorLibrary.TOKENS_MUST_BE_DIFFERENT());
         require(getPool[tokenA][tokenB] == address(0), ErrorLibrary.POOL_ALREADY_EXISTS(address(getPool[tokenA][tokenB])));
 
-        LiquidityPool pool = new LiquidityPool(tokenA, tokenB, treasury);
+        LiquidityPool pool = new LiquidityPool(tokenA, tokenB, treasury, priceFeedA, priceFeedB);
         address poolAddress = address(pool);
 
         getPool[tokenA][tokenB] = poolAddress;

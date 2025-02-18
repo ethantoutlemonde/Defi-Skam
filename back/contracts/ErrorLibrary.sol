@@ -18,6 +18,7 @@ library ErrorLibrary {
     error AMOUNT_MUST_BE_GREATER_THAN_ZERO();
     error INVALID_RESERVES();
     error SWAP_AMOUNT_TOO_LOW();
+    error PRICE_SLIPPAGE_TOO_HIGH();
 
     // Other errors
     error DIVISION_BY_ZERO();
